@@ -1,0 +1,22 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Connect repo → New Blueprint → select this file, then set GROQ_API_KEY in the dashboard.
+
+services:
+  - type: web
+    name: insurance-ai
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: LLM_PROVIDER
+        value: groq
+      - key: SERVER_RELOAD
+        value: false
+      - key: SERVER_HOST
+        value: 0.0.0.0
+      - key: GROQ_API_KEY
+        sync: false
