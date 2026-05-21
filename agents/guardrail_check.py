@@ -35,6 +35,23 @@ def _has_pii(text: str) -> bool:
     return False
 
 
+# Explicit PII-sharing phrases (regex alone can miss spelled-out IDs)
+_PII_KEYWORD_PATTERN = re.compile(
+    r"\b("
+    r"ssn|social\s+security(\s+number)?|aadhaar|aadhar|pan\s+card|"
+    r"bank\s+account|routing\s+number|credit\s+card|debit\s+card|"
+    r"passport\s+number|driver'?s?\s+license\s+number|"
+    r"(full\s+)?policy\s+number|(full\s+)?claim\s+number|vin\s+number"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _has_actionable_pii(text: str) -> bool:
+    """True only when message likely contains real identifiers to block."""
+    return _has_pii(text) or bool(_PII_KEYWORD_PATTERN.search(text))
+
+
 SYSTEM_PROMPT = """\
 You are an insurance intake validation agent. Analyze the policyholder message and return ONLY a valid JSON object with exactly three boolean fields. No explanation, no markdown, no extra text.
 
@@ -56,6 +73,9 @@ You are an insurance intake validation agent. Analyze the policyholder message a
      • Full Driver's License or VIN number
      • Government passport numbers
    NOTE: Partial masking (****-4321, XXX-XX-1234) is NOT PII → set TRUE.
+   NOT PII (always set TRUE): accident location (city, highway, address area), dates
+     (today, yesterday, March 5), incident narrative, vehicle damage description,
+     injuries described without ID numbers, emotional context of the accident.
 
 3. needs_escalation (boolean)
    TRUE  → message contains ANY of:
@@ -92,6 +112,9 @@ Message: "A tree fell on our house last night. $35,000 in damage. No injuries. W
 Message: "I lost everything in the tornado. I have nothing left and feel completely hopeless."
 → {"is_insurance_related": true, "no_pii": true, "needs_escalation": true}
 
+Message: "I crashed into a truck on Delhi expressway today while driving. No injuries."
+→ {"is_insurance_related": true, "no_pii": true, "needs_escalation": false}
+
 Return EXACTLY this JSON and nothing else:
 {"is_insurance_related": true or false, "no_pii": true or false, "needs_escalation": true or false}
 """
@@ -114,7 +137,7 @@ def run_guardrail_check(
     model = get_models().guardrail_model
 
     # Hard deterministic PII check (overrides LLM if triggered)
-    deterministic_pii_found = _has_pii(message)
+    deterministic_pii_found = _has_actionable_pii(message)
 
     # Build context-aware user prompt
     if conversation_history and len(conversation_history) >= 2:
@@ -151,9 +174,12 @@ def run_guardrail_check(
             data = json.loads(raw)
             result = GuardrailOutput(**data)
 
-            # Hard override: if regex found PII, enforce no_pii=False regardless
+            # Hard override: block only when regex/keywords find real PII
             if deterministic_pii_found:
                 result.no_pii = False
+            elif not result.no_pii:
+                # LLM false positive on location/date/incident details — do not block
+                result.no_pii = True
 
             return result
 
